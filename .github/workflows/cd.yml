@@ -1,0 +1,134 @@
+name: Continuous Deployment
+
+on:
+  push:
+    branches: [dev, release, main]
+
+jobs:
+  build:
+    name: Build Frontend
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20.x"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prod Build
+        if: github.ref_name == 'main'
+        env:
+          VITE_SENTRY_DSN: ${{ secrets.PROD_SENTRY_DSN }}
+          VITE_ENV: production
+        run: npm run build:prod
+
+      - name: Generate Pre-Prod Build
+        if: github.ref_name == 'release'
+        env:
+          VITE_SENTRY_DSN: ${{ secrets.PREPROD_SENTRY_DSN }}
+          VITE_ENV: pre-prod
+        run: npm run build:pre-prod
+
+      - name: Generate Dev Build
+        if: github.ref_name == 'dev'
+        env:
+          VITE_ENV: development
+        run: npm run build
+
+      - name: Upload Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: react-build
+          path: dist # Matches standard Vite output directory
+
+  terraform_apply:
+    name: Terraform Apply
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ fromJson('{dev:"./provisioning/nonprod/dev", release:"./provisioning/nonprod/pre-prod", main:"./provisioning/prod/prod"}')[github.ref_name] }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup AWS Credentials for Prod
+        if: github.ref_name == 'main'
+        run: |
+          echo "AWS_ACCESS_KEY_ID=${{ secrets.PROD_AWS_ACCESS_KEY_ID }}" >> $GITHUB_ENV
+          echo "AWS_SECRET_ACCESS_KEY=${{ secrets.PROD_AWS_SECRET_ACCESS_KEY }}" >> $GITHUB_ENV
+
+      - name: Setup AWS Credentials for Non-Prod
+        if: github.ref_name != 'main'
+        run: |
+          echo "AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}" >> $GITHUB_ENV
+          echo "AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}" >> $GITHUB_ENV
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.1.3"
+
+      - name: Terraform Init
+        env:
+          AWS_DEFAULT_REGION: "eu-west-2"
+        run: terraform init -input=false
+
+      - name: Terraform Apply
+        env:
+          AWS_DEFAULT_REGION: "eu-west-2"
+          TF_VAR_app_version: ${{ github.sha }}
+        run: terraform apply -auto-approve -input=false
+
+  deploy:
+    name: Sync S3 & Invalidate CloudFront
+    runs-on: ubuntu-latest
+    needs: [build, terraform_apply]
+    steps:
+      - name: Download Build Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: react-build
+
+      - name: Configure AWS Credentials (Prod)
+        if: github.ref_name == 'main'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.PROD_AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.PROD_AWS_SECRET_ACCESS_KEY }}
+          aws-region: eu-west-2
+
+      - name: Configure AWS Credentials (Non-Prod)
+        if: github.ref_name != 'main'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: eu-west-2
+
+      - name: Deploy to S3
+        run: |
+          BUCKET_NAME=$(echo "${{ fromJson('{dev:"lab-frontend-app-dev", release:"lab-frontend-app-preprod", main:"lab-frontend-app-prod"}')[github.ref_name] }}")
+          aws s3 sync . s3://$BUCKET_NAME --delete
+
+  push_tag:
+    name: Create Git Release Tag
+    runs-on: ubuntu-latest
+    needs: [deploy]
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Bump version and push tag
+        uses: anothrNick/github-tag-action@1.67.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WITH_V: true
