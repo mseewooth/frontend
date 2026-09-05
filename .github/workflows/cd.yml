@@ -114,8 +114,25 @@ jobs:
 
       - name: Deploy to S3
         run: |
-          BUCKET_NAME=$(echo "${{ fromJson('{dev:"lab-frontend-app-dev", release:"lab-frontend-app-preprod", main:"lab-frontend-app-prod"}')[github.ref_name] }}")
+          BUCKET_NAME=$(echo "${{ fromJson('{dev:"lab-frontend-dev", release:"lab-frontend-preprod", main:"lab-frontend-prod"}')[github.ref_name] }}")
           aws s3 sync . s3://$BUCKET_NAME --delete
+
+      - name: Invalidate CloudFront Cache
+        run: |
+          # 1. Resolve target bucket name
+          BUCKET_NAME="${{ fromJson('{dev:"lab-frontend-dev", release:"lab-frontend-preprod", main:"lab-frontend-prod"}')[github.ref_name] }}"
+          
+          # 2. Query CloudFront for the distribution ID linked to this S3 bucket origin
+          DISTRIBUTION_ID=$(aws cloudfront list-distributions --query "DistributionList.Items[?Origins.Items[?DomainName=='${BUCKET_NAME}.s3.amazonaws.com' || contains(DomainName, '${BUCKET_NAME}')]].Id" --output text)
+
+          # 3. Handle invalidation if distribution exists
+          if [ -n "$DISTRIBUTION_ID" ] && [ "$DISTRIBUTION_ID" != "None" ]; then
+            echo "Found Distribution ID: $DISTRIBUTION_ID. Creating invalidation..."
+            aws cloudfront create-invalidation --distribution-id $DISTRIBUTION_ID --paths "/*"
+          else
+            echo "Error: No CloudFront distribution found for bucket $BUCKET_NAME"
+            exit 1
+          fi
 
   push_tag:
     name: Create Git Release Tag
