@@ -1,5 +1,6 @@
 resource "aws_s3_bucket" "app" {
   bucket = local.s3_bucket_name
+  force_destroy = true
 
   tags = merge(local.tags, {
     Name = local.s3_bucket_name
