@@ -7,25 +7,26 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-node_modules
-dist
-dist-ssr
+# Dependencies & Builds
+node_modules/
+dist/
+dist-ssr/
 *.local
+.env
+.env.local
 
-# Editor directories and files
+# Editor & System Files
 .vscode/*
 !.vscode/extensions.json
-.idea
+.idea/
 .DS_Store
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.sw?
-node_modules
-dist
-.env
-.env.local.terraform/
-*.tfstate
-*.tfstate.*
+
+# Terraform
 .terraform/
+*.tfstate.backup
+crash.log
