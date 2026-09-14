@@ -28,7 +28,5 @@ dist-ssr/
 
 # Terraform
 .terraform/
-*.tfstate
 *.tfstate.backup
-*.tfstate.*
 crash.log
